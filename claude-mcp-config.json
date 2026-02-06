@@ -1,0 +1,15 @@
+{
+  "$schema": "https://modelcontextprotocol.io/schemas/config.json",
+  "mcpServers": {
+    "redmine": {
+      "command": "node",
+      "args": ["d:\\Documents\\Innova\\Project\\mcp-redmine-server\\index.js"],
+      "env": {
+        "REDMINE_API_KEY": "8cb1b1d9c6e69a5467272bfae6da8225a69cbc54",
+        "REDMINE_BASE_URL": "https://3cad.tech",
+        "REDMINE_PROJECT_ID": "8",
+        "REDMINE_PROJECT_IDENTIFIER": "cad-tech"
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "mcp-redmine-server",
+  "version": "1.0.0",
+  "description": "Model Context Protocol (MCP) server for Redmine integration - provides comprehensive Redmine API access to Claude Code",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "mcp-redmine": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "redmine",
+    "claude",
+    "ai",
+    "project-management"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "dotenv": "^17.2.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
