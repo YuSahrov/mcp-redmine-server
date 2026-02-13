@@ -11,6 +11,8 @@ import { execSync } from 'child_process';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
+import { createReadStream } from 'fs';
+import { basename } from 'path';
 
 /**
  * MCP Redmine Server
@@ -93,6 +95,67 @@ async function getIssue(issueId) {
 }
 
 /**
+ * Upload file to Redmine
+ * Returns upload token that can be used to attach file to issue
+ */
+async function uploadFile(filePath) {
+  return new Promise((resolve, reject) => {
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      reject(new Error(`File not found: ${filePath}`));
+      return;
+    }
+
+    // Get file info
+    const fileStats = fs.statSync(filePath);
+    const fileName = basename(filePath);
+
+    // Read file content
+    const fileContent = fs.readFileSync(filePath);
+
+    const url = `${REDMINE_CONFIG.baseUrl}/uploads.json`;
+    const options = {
+      method: 'POST',
+      headers: {
+        'X-Redmine-API-Key': REDMINE_CONFIG.apiKey,
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': fileStats.size
+      }
+    };
+
+    const req = https.request(url, options, (res) => {
+      let responseData = '';
+
+      res.on('data', (chunk) => {
+        responseData += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const parsedData = responseData ? JSON.parse(responseData) : {};
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            // Add filename to response
+            parsedData.upload.filename = fileName;
+            resolve(parsedData.upload);
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${responseData}`));
+          }
+        } catch (error) {
+          reject(new Error(`Parse error: ${error.message}`));
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      reject(error);
+    });
+
+    req.write(fileContent);
+    req.end();
+  });
+}
+
+/**
  * Create Redmine issue
  */
 async function createIssue(title, description, options = {}) {
@@ -111,6 +174,15 @@ async function createIssue(title, description, options = {}) {
     issueData.issue.parent_issue_id = options.parentId;
   }
 
+  // Add file uploads if provided
+  if (options.uploads && Array.isArray(options.uploads) && options.uploads.length > 0) {
+    issueData.issue.uploads = options.uploads.map(upload => ({
+      token: upload.token,
+      filename: upload.filename,
+      content_type: upload.content_type || 'application/octet-stream'
+    }));
+  }
+
   const result = await makeRedmineRequest('POST', '/issues.json', issueData);
   return result.issue;
 }
@@ -118,7 +190,7 @@ async function createIssue(title, description, options = {}) {
 /**
  * Add comment to issue
  */
-async function addComment(issueId, comment, statusId = null) {
+async function addComment(issueId, comment, statusId = null, uploads = null) {
   const updateData = {
     issue: {
       notes: comment
@@ -129,8 +201,62 @@ async function addComment(issueId, comment, statusId = null) {
     updateData.issue.status_id = statusId;
   }
 
+  // Add file uploads if provided
+  if (uploads && Array.isArray(uploads) && uploads.length > 0) {
+    updateData.issue.uploads = uploads.map(upload => ({
+      token: upload.token,
+      filename: upload.filename,
+      content_type: upload.content_type || 'application/octet-stream'
+    }));
+  }
+
   await makeRedmineRequest('PUT', `/issues/${issueId}.json`, updateData);
   return true;
+}
+
+/**
+ * Add attachments to existing issue
+ */
+async function addAttachments(issueId, filePaths) {
+  // Upload all files and get tokens
+  const uploads = [];
+  const uploadResults = [];
+
+  for (const filePath of filePaths) {
+    try {
+      const upload = await uploadFile(filePath);
+      uploads.push(upload);
+      uploadResults.push({
+        filePath,
+        status: 'success',
+        token: upload.token,
+        filename: upload.filename
+      });
+    } catch (error) {
+      uploadResults.push({
+        filePath,
+        status: 'error',
+        error: error.message
+      });
+    }
+  }
+
+  // If we have successful uploads, attach them to the issue
+  if (uploads.length > 0) {
+    await addComment(
+      issueId,
+      `Added ${uploads.length} file(s): ${uploads.map(u => u.filename).join(', ')}`,
+      null,
+      uploads
+    );
+  }
+
+  return {
+    success: uploads.length > 0,
+    totalFiles: filePaths.length,
+    successfulUploads: uploads.length,
+    results: uploadResults
+  };
 }
 
 /**
@@ -461,7 +587,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'redmine_create_issue',
-        description: 'Create a new Redmine issue with specified title and description',
+        description: 'Create a new Redmine issue with specified title and description. Can optionally attach files by providing file paths.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -488,6 +614,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             parent_id: {
               type: 'number',
               description: 'Parent issue ID (for creating subtasks)',
+            },
+            file_paths: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+              description: 'Optional: Array of absolute file paths to attach to the issue',
             },
           },
           required: ['title', 'description'],
@@ -762,6 +895,41 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['project_id', 'title'],
         },
       },
+      {
+        name: 'redmine_upload_file',
+        description: 'Upload a file to Redmine and get an upload token. This token can be used later to attach the file to an issue.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            file_path: {
+              type: 'string',
+              description: 'Absolute path to the file to upload',
+            },
+          },
+          required: ['file_path'],
+        },
+      },
+      {
+        name: 'redmine_add_attachments',
+        description: 'Add one or more file attachments to an existing Redmine issue. Files are uploaded and automatically attached.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            issue_id: {
+              type: 'string',
+              description: 'The Redmine issue ID to attach files to',
+            },
+            file_paths: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+              description: 'Array of absolute file paths to attach to the issue',
+            },
+          },
+          required: ['issue_id', 'file_paths'],
+        },
+      },
     ],
   };
 });
@@ -785,17 +953,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'redmine_create_issue': {
+        let uploads = [];
+
+        // Upload files if provided
+        if (args.file_paths && Array.isArray(args.file_paths) && args.file_paths.length > 0) {
+          for (const filePath of args.file_paths) {
+            try {
+              const upload = await uploadFile(filePath);
+              uploads.push(upload);
+            } catch (error) {
+              console.error(`Failed to upload file ${filePath}:`, error.message);
+            }
+          }
+        }
+
         const issue = await createIssue(args.title, args.description, {
           projectId: args.project_id,
           trackerId: args.tracker_id,
           priorityId: args.priority_id,
           parentId: args.parent_id,
+          uploads: uploads.length > 0 ? uploads : undefined,
         });
+
+        let responseText = `Issue created successfully!\n\nID: #${issue.id}\nTitle: ${issue.subject}\nProject: ${issue.project.name}\nURL: ${REDMINE_CONFIG.baseUrl}/issues/${issue.id}`;
+
+        if (uploads.length > 0) {
+          responseText += `\n\nAttached files (${uploads.length}):\n${uploads.map(u => `- ${u.filename}`).join('\n')}`;
+        }
+
         return {
           content: [
             {
               type: 'text',
-              text: `Issue created successfully!\n\nID: #${issue.id}\nTitle: ${issue.subject}\nProject: ${issue.project.name}\nURL: ${REDMINE_CONFIG.baseUrl}/issues/${issue.id}`,
+              text: responseText,
             },
           ],
         };
@@ -985,6 +1175,59 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: 'text',
               text: `Wiki page "${args.title}" deleted successfully from project "${args.project_id}"`,
+            },
+          ],
+        };
+      }
+
+      case 'redmine_upload_file': {
+        const upload = await uploadFile(args.file_path);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                filename: upload.filename,
+                token: upload.token,
+                size: upload.filesize,
+                message: `File "${upload.filename}" uploaded successfully. Use this token to attach it to an issue.`
+              }, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'redmine_add_attachments': {
+        const result = await addAttachments(args.issue_id, args.file_paths);
+
+        let responseText = '';
+        if (result.success) {
+          responseText = `Successfully attached ${result.successfulUploads} of ${result.totalFiles} file(s) to issue #${args.issue_id}\n\n`;
+          responseText += `Issue URL: ${REDMINE_CONFIG.baseUrl}/issues/${args.issue_id}\n\n`;
+          responseText += 'Upload results:\n';
+          result.results.forEach(r => {
+            if (r.status === 'success') {
+              responseText += `✓ ${r.filename} (${basename(r.filePath)})\n`;
+            } else {
+              responseText += `✗ ${basename(r.filePath)}: ${r.error}\n`;
+            }
+          });
+        } else {
+          responseText = `Failed to attach files to issue #${args.issue_id}\n\n`;
+          responseText += 'Errors:\n';
+          result.results.forEach(r => {
+            if (r.status === 'error') {
+              responseText += `✗ ${basename(r.filePath)}: ${r.error}\n`;
+            }
+          });
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: responseText,
             },
           ],
         };

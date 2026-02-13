@@ -103,10 +103,46 @@ Redmine Server
 
 ## [Unreleased]
 
+### Added - v1.1.0 (In Development)
+
+#### File Upload & Attachments ✅ IMPLEMENTED
+- ✅ **redmine_upload_file** - Upload files to Redmine and get upload token
+  - Supports all file types (images, documents, archives, code, logs, etc.)
+  - Returns upload token for later use
+  - Automatic filename detection
+
+- ✅ **redmine_add_attachments** - Attach multiple files to existing issues
+  - Upload and attach in single operation
+  - Batch file upload support
+  - Detailed status reporting (success/error per file)
+  - Automatic comment with file list
+
+- ✅ Enhanced **redmine_create_issue** with file attachment support
+  - New `file_paths` parameter for attaching files during issue creation
+  - Automatic file upload and token management
+  - Files attached in single API call
+
+- ✅ Enhanced **addComment** function with attachment support
+  - Internal support for attaching files when adding comments
+  - Used by `redmine_add_attachments` tool
+
+#### Technical Implementation
+- Two-step Redmine upload process (upload → attach) automated
+- Binary file handling with `application/octet-stream` content type
+- File existence and readability validation
+- Comprehensive error handling for file operations
+- Support for absolute file paths on all platforms
+
+#### Documentation Updates
+- Added "File Upload API Details" section to README
+- Added file attachment usage examples
+- Updated architecture diagram with file upload flow
+- Added supported file types documentation
+- Updated feature list with file attachment capabilities
+
 ### Planned for v1.1.0
 - [ ] Custom field support
 - [ ] Time tracking integration
-- [ ] Attachment upload/download
 - [ ] Batch operations API
 - [ ] Caching layer for performance
 - [ ] Webhook support
