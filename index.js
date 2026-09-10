@@ -113,7 +113,7 @@ async function uploadFile(filePath) {
     // Read file content
     const fileContent = fs.readFileSync(filePath);
 
-    const url = `${REDMINE_CONFIG.baseUrl}/uploads.json`;
+    const url = `${REDMINE_CONFIG.baseUrl}/uploads.json?filename=${encodeURIComponent(fileName)}`;
     const options = {
       method: 'POST',
       headers: {
