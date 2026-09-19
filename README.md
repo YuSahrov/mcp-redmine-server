@@ -20,7 +20,7 @@ The server provides the following MCP tools:
 ### Issue Operations
 
 1. **redmine_get_issue** - Get detailed issue information
-   - Includes description, status, priority, comments
+   - Includes description, status, priority, comments, attachments
    - Returns full issue object with all metadata
 
 2. **redmine_create_issue** - Create new issue
@@ -42,64 +42,76 @@ The server provides the following MCP tools:
    - Upload and attach multiple files in one operation
    - Automatically adds comment with file list
 
+6. **redmine_download_attachment** - Download attachment content
+   - Parameters: attachment_id, output_path
+   - Works for issue, wiki and project file attachments
+   - output_path may be a directory (keeps the original filename)
+
+7. **redmine_get_project_files** - List files from the project "Files" section
+   - Returns filename, size, description, version and download URL
+
+8. **redmine_upload_project_file** - Upload file to the project "Files" section
+   - Parameters: project_id, file_path, description, version_id
+   - Uploads to project files, not to an issue
+
 ### Querying & Filtering
 
-6. **redmine_get_issues_by_status** - Filter issues by status
+9. **redmine_get_issues_by_status** - Filter issues by status
    - Parameters: status_name, limit, project_id
    - Returns issues with specific status (e.g., "New", "In Progress")
    - Can filter by project or get from all projects
 
-7. **redmine_get_statuses** - Get all available statuses
-   - Returns complete list of project statuses
-   - Useful for discovering valid status names
+10. **redmine_get_statuses** - Get all available statuses
+    - Returns complete list of project statuses
+    - Useful for discovering valid status names
 
-8. **redmine_get_projects** - Get all accessible projects
-   - Lists all Redmine projects available to your API key
-   - Useful for multi-project environments
+11. **redmine_get_projects** - Get all accessible projects
+    - Lists all Redmine projects available to your API key
+    - Useful for multi-project environments
 
-9. **redmine_get_project** - Get project details
-   - Returns project info with trackers and enabled modules
+12. **redmine_get_project** - Get project details
+    - Returns project info with trackers and enabled modules
 
-10. **redmine_get_project_issues** - Get issues from specific project
+13. **redmine_get_project_issues** - Get issues from specific project
     - Supports pagination and filtering
     - Filter by status, tracker, assignee
 
 ### Relations & Hierarchy
 
-11. **redmine_get_issue_tree** - Get full issue tree
+14. **redmine_get_issue_tree** - Get full issue tree
     - Returns main issue, related issues, and child issues
     - Shows complete issue hierarchy
 
-12. **redmine_create_relation** - Link two issues
+15. **redmine_create_relation** - Link two issues
     - Relation types: relates, blocks, blocked, duplicates, precedes, follows
     - Creates bidirectional relationships
 
 ### Workflow Automation
 
-13. **redmine_start_fix** - Start fix workflow
+16. **redmine_start_fix** - Start fix workflow
     - Creates Git branch automatically
     - Updates issue status to "In Progress"
     - Adds workflow comment
 
-14. **redmine_complete_fix** - Complete fix workflow
+17. **redmine_complete_fix** - Complete fix workflow
     - Updates issue status to "Resolved"
     - Adds completion comment with commit details
     - Validates working directory is clean
 
 ### Wiki Operations
 
-15. **redmine_wiki_get_page** - Get wiki page content
+18. **redmine_wiki_get_page** - Get wiki page content
     - Returns page text and metadata
     - Includes attachments information
 
-16. **redmine_wiki_get_index** - List all wiki pages
+19. **redmine_wiki_get_index** - List all wiki pages
     - Returns index of all pages in project
 
-17. **redmine_wiki_put_page** - Create or update wiki page
+20. **redmine_wiki_put_page** - Create or update wiki page
     - Uses Redmine Textile markup
     - Supports page hierarchy via parent_title
 
-18. **redmine_wiki_delete_page** - Delete wiki page
+21. **redmine_wiki_delete_page** - Delete wiki page
     - Permanently removes wiki page from project
 
 ## Installation

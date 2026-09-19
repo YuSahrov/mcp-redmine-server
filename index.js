@@ -90,7 +90,7 @@ function makeRedmineRequest(method, endpoint, data = null) {
  * Get Redmine issue details
  */
 async function getIssue(issueId) {
-  const result = await makeRedmineRequest('GET', `/issues/${issueId}.json?include=journals,changesets,relations,children`);
+  const result = await makeRedmineRequest('GET', `/issues/${issueId}.json?include=journals,changesets,relations,children,attachments`);
   return result.issue;
 }
 
@@ -134,8 +134,9 @@ async function uploadFile(filePath) {
         try {
           const parsedData = responseData ? JSON.parse(responseData) : {};
           if (res.statusCode >= 200 && res.statusCode < 300) {
-            // Add filename to response
+            // Add filename and size to response (/uploads.json returns only id and token)
             parsedData.upload.filename = fileName;
+            parsedData.upload.filesize = fileStats.size;
             resolve(parsedData.upload);
           } else {
             reject(new Error(`HTTP ${res.statusCode}: ${responseData}`));
@@ -554,6 +555,140 @@ async function deleteWikiPage(projectId, pageTitle) {
   return true;
 }
 
+/**
+ * Get files from project "Files" section
+ */
+async function getProjectFiles(projectId) {
+  const result = await makeRedmineRequest('GET', `/projects/${projectId}/files.json`);
+  return result.files || [];
+}
+
+/**
+ * Upload file to project "Files" section
+ */
+async function uploadProjectFile(projectId, filePath, options = {}) {
+  const upload = await uploadFile(filePath);
+
+  const fileData = {
+    file: {
+      token: upload.token,
+      filename: upload.filename
+    }
+  };
+
+  if (options.description) {
+    fileData.file.description = options.description;
+  }
+  if (options.versionId) {
+    fileData.file.version_id = options.versionId;
+  }
+
+  await makeRedmineRequest('POST', `/projects/${projectId}/files.json`, fileData);
+
+  return {
+    filename: upload.filename,
+    filesize: upload.filesize,
+    token: upload.token
+  };
+}
+
+/**
+ * Get attachment metadata
+ */
+async function getAttachment(attachmentId) {
+  const result = await makeRedmineRequest('GET', `/attachments/${attachmentId}.json`);
+  return result.attachment;
+}
+
+/**
+ * Download binary content to a local file, following redirects
+ */
+function downloadToFile(url, targetPath, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      method: 'GET',
+      headers: {
+        'X-Redmine-API-Key': REDMINE_CONFIG.apiKey
+      }
+    };
+
+    const req = https.request(url, options, (res) => {
+      // Redmine may redirect to the actual file storage location
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if (redirectsLeft <= 0) {
+          reject(new Error('Too many redirects while downloading attachment'));
+          return;
+        }
+        const nextUrl = new URL(res.headers.location, url).toString();
+        downloadToFile(nextUrl, targetPath, redirectsLeft - 1).then(resolve, reject);
+        return;
+      }
+
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        let errorData = '';
+        res.on('data', (chunk) => {
+          errorData += chunk;
+        });
+        res.on('end', () => {
+          reject(new Error(`HTTP ${res.statusCode}: ${errorData}`));
+        });
+        return;
+      }
+
+      const file = fs.createWriteStream(targetPath);
+
+      file.on('error', (error) => {
+        fs.unlink(targetPath, () => reject(error));
+      });
+
+      file.on('finish', () => {
+        file.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(targetPath);
+          }
+        });
+      });
+
+      res.pipe(file);
+    });
+
+    req.on('error', (error) => {
+      reject(error);
+    });
+
+    req.end();
+  });
+}
+
+/**
+ * Download attachment content to a local file
+ */
+async function downloadAttachment(attachmentId, outputPath = null) {
+  const attachment = await getAttachment(attachmentId);
+
+  // A directory (or no path at all) keeps the original filename
+  let targetPath = outputPath || process.cwd();
+  if (fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory()) {
+    targetPath = path.join(targetPath, attachment.filename);
+  }
+
+  const downloadUrl = attachment.content_url ||
+    `${REDMINE_CONFIG.baseUrl}/attachments/download/${attachmentId}/${encodeURIComponent(attachment.filename)}`;
+
+  await downloadToFile(downloadUrl, targetPath);
+
+  return {
+    id: attachment.id,
+    filename: attachment.filename,
+    filesize: attachment.filesize,
+    contentType: attachment.content_type,
+    path: targetPath
+  };
+}
+
 // Create MCP server instance
 const server = new Server(
   {
@@ -930,6 +1065,64 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['issue_id', 'file_paths'],
         },
       },
+      {
+        name: 'redmine_get_project_files',
+        description: 'Get the list of files from the "Files" section of a Redmine project, including filename, size, description, version and download URL',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            project_id: {
+              type: 'string',
+              description: 'The Redmine project ID or identifier',
+            },
+          },
+          required: ['project_id'],
+        },
+      },
+      {
+        name: 'redmine_upload_project_file',
+        description: 'Upload a file to the "Files" section of a Redmine project (not an issue attachment)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            project_id: {
+              type: 'string',
+              description: 'The Redmine project ID or identifier',
+            },
+            file_path: {
+              type: 'string',
+              description: 'Absolute path to the file to upload',
+            },
+            description: {
+              type: 'string',
+              description: 'Optional description shown next to the file',
+            },
+            version_id: {
+              type: 'number',
+              description: 'Optional version (release) ID to attach the file to',
+            },
+          },
+          required: ['project_id', 'file_path'],
+        },
+      },
+      {
+        name: 'redmine_download_attachment',
+        description: 'Download the content of a Redmine attachment (issue, wiki or project file) to a local file. Attachment IDs come from redmine_get_issue, redmine_wiki_get_page or redmine_get_project_files.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            attachment_id: {
+              type: 'string',
+              description: 'The Redmine attachment ID',
+            },
+            output_path: {
+              type: 'string',
+              description: 'Absolute path for the downloaded file, or a directory to keep the original filename (default: current working directory)',
+            },
+          },
+          required: ['attachment_id'],
+        },
+      },
     ],
   };
 });
@@ -1228,6 +1421,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: 'text',
               text: responseText,
+            },
+          ],
+        };
+      }
+
+      case 'redmine_get_project_files': {
+        const files = await getProjectFiles(args.project_id);
+
+        let responseText = `Files in project "${args.project_id}": ${files.length}\n\n`;
+        files.forEach(file => {
+          responseText += `[${file.id}] ${file.filename} (${file.filesize} bytes)\n`;
+          if (file.description) {
+            responseText += `  Description: ${file.description}\n`;
+          }
+          if (file.version) {
+            responseText += `  Version: ${file.version.name}\n`;
+          }
+          responseText += `  Uploaded: ${file.created_on} by ${file.author ? file.author.name : 'unknown'}\n`;
+          responseText += `  Download: ${file.content_url}\n\n`;
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: responseText,
+            },
+          ],
+        };
+      }
+
+      case 'redmine_upload_project_file': {
+        const result = await uploadProjectFile(args.project_id, args.file_path, {
+          description: args.description,
+          versionId: args.version_id
+        });
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `File "${result.filename}" (${result.filesize} bytes) uploaded to project "${args.project_id}"\n\n` +
+                `Files URL: ${REDMINE_CONFIG.baseUrl}/projects/${args.project_id}/files`,
+            },
+          ],
+        };
+      }
+
+      case 'redmine_download_attachment': {
+        const result = await downloadAttachment(args.attachment_id, args.output_path);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Attachment #${result.id} downloaded successfully.\n\n` +
+                `Filename: ${result.filename}\n` +
+                `Size: ${result.filesize} bytes\n` +
+                `Content type: ${result.contentType}\n` +
+                `Saved to: ${result.path}`,
             },
           ],
         };
