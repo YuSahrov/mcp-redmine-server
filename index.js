@@ -216,6 +216,52 @@ async function addComment(issueId, comment, statusId = null, uploads = null) {
 }
 
 /**
+ * Update issue fields
+ * Only fields explicitly passed are sent to Redmine, everything else stays untouched
+ */
+async function updateIssue(issueId, fields = {}) {
+  const fieldMap = {
+    subject: 'subject',
+    description: 'description',
+    projectId: 'project_id',
+    trackerId: 'tracker_id',
+    statusId: 'status_id',
+    priorityId: 'priority_id',
+    assignedToId: 'assigned_to_id',
+    parentIssueId: 'parent_issue_id',
+    categoryId: 'category_id',
+    fixedVersionId: 'fixed_version_id',
+    startDate: 'start_date',
+    dueDate: 'due_date',
+    estimatedHours: 'estimated_hours',
+    doneRatio: 'done_ratio',
+    notes: 'notes',
+    privateNotes: 'private_notes',
+    isPrivate: 'is_private',
+    customFields: 'custom_fields'
+  };
+
+  const issueData = { issue: {} };
+
+  for (const [key, redmineField] of Object.entries(fieldMap)) {
+    if (fields[key] !== undefined && fields[key] !== null) {
+      issueData.issue[redmineField] = fields[key];
+    }
+  }
+
+  if (Object.keys(issueData.issue).length === 0) {
+    throw new Error('Nothing to update: provide at least one field to change');
+  }
+
+  await makeRedmineRequest('PUT', `/issues/${issueId}.json`, issueData);
+
+  return {
+    updatedFields: Object.keys(issueData.issue),
+    issue: await getIssue(issueId)
+  };
+}
+
+/**
  * Add attachments to existing issue
  */
 async function addAttachments(issueId, filePaths) {
@@ -784,6 +830,91 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: 'redmine_update_issue',
+        description: 'Update fields of an existing Redmine issue (subject, description, status, priority, tracker, assignee, dates, progress, parent, version, category). Only the fields you pass are changed, the rest stay as they are. Use redmine_add_comment when you only want to add a comment.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            issue_id: {
+              type: 'string',
+              description: 'The Redmine issue ID to update',
+            },
+            subject: {
+              type: 'string',
+              description: 'New issue title/subject',
+            },
+            description: {
+              type: 'string',
+              description: 'New issue description (replaces the current one entirely)',
+            },
+            project_id: {
+              type: 'string',
+              description: 'Move the issue to another project (ID or identifier)',
+            },
+            tracker_id: {
+              type: 'number',
+              description: 'New tracker ID (1=Bug, 2=Feature, 3=Support)',
+            },
+            status_id: {
+              type: 'number',
+              description: 'New status ID (1=New, 2=In Progress, 3=Resolved, 5=Closed). Use redmine_get_statuses to discover IDs',
+            },
+            priority_id: {
+              type: 'number',
+              description: 'New priority ID (1=Low, 2=Normal, 3=High, 4=Urgent, 5=Immediate)',
+            },
+            assigned_to_id: {
+              type: 'number',
+              description: 'User ID of the new assignee',
+            },
+            parent_issue_id: {
+              type: 'number',
+              description: 'New parent issue ID (turns the issue into a subtask)',
+            },
+            category_id: {
+              type: 'number',
+              description: 'Issue category ID',
+            },
+            fixed_version_id: {
+              type: 'number',
+              description: 'Target version (milestone) ID',
+            },
+            start_date: {
+              type: 'string',
+              description: 'Start date in YYYY-MM-DD format',
+            },
+            due_date: {
+              type: 'string',
+              description: 'Due date in YYYY-MM-DD format',
+            },
+            estimated_hours: {
+              type: 'number',
+              description: 'Estimated time in hours',
+            },
+            done_ratio: {
+              type: 'number',
+              description: 'Progress percentage (0-100)',
+            },
+            notes: {
+              type: 'string',
+              description: 'Optional comment describing the change (added to issue history)',
+            },
+            private_notes: {
+              type: 'boolean',
+              description: 'Set to true to make the comment private (only with notes)',
+            },
+            custom_fields: {
+              type: 'array',
+              items: {
+                type: 'object',
+              },
+              description: 'Custom fields as an array of objects: [{ "id": 1, "value": "text" }]',
+            },
+          },
+          required: ['issue_id'],
+        },
+      },
+      {
         name: 'redmine_get_issues_by_status',
         description: 'Get all issues with a specific status (e.g., "New", "In Progress", "Resolved"). Can filter by project or get from all projects',
         inputSchema: {
@@ -1191,6 +1322,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: 'text',
               text: `Comment added successfully to issue #${args.issue_id}`,
+            },
+          ],
+        };
+      }
+
+      case 'redmine_update_issue': {
+        const result = await updateIssue(args.issue_id, {
+          subject: args.subject,
+          description: args.description,
+          projectId: args.project_id,
+          trackerId: args.tracker_id,
+          statusId: args.status_id,
+          priorityId: args.priority_id,
+          assignedToId: args.assigned_to_id,
+          parentIssueId: args.parent_issue_id,
+          categoryId: args.category_id,
+          fixedVersionId: args.fixed_version_id,
+          startDate: args.start_date,
+          dueDate: args.due_date,
+          estimatedHours: args.estimated_hours,
+          doneRatio: args.done_ratio,
+          notes: args.notes,
+          privateNotes: args.private_notes,
+          customFields: args.custom_fields
+        });
+
+        const issue = result.issue;
+        let responseText = `Issue #${issue.id} updated successfully!\n\n`;
+        responseText += `Updated fields: ${result.updatedFields.join(', ')}\n\n`;
+        responseText += `Title: ${issue.subject}\n`;
+        responseText += `Status: ${issue.status.name}\n`;
+        responseText += `Priority: ${issue.priority.name}\n`;
+        responseText += `Assignee: ${issue.assigned_to ? issue.assigned_to.name : 'not assigned'}\n`;
+        responseText += `Progress: ${issue.done_ratio}%\n`;
+        responseText += `URL: ${REDMINE_CONFIG.baseUrl}/issues/${issue.id}`;
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: responseText,
             },
           ],
         };
